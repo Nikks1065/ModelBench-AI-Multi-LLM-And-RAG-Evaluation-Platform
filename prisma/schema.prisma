@@ -1,0 +1,212 @@
+// Prisma Schema for ModelBench AI
+// Multi-LLM Evaluation, Benchmarking & Orchestration Platform
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum RunStatus {
+  INITIALIZED
+  RUNNING
+  COMPLETED
+  CANCELLED
+  FAILED
+}
+
+enum ResponseStatus {
+  PENDING
+  STREAMING
+  SUCCESS
+  FAILED
+  TIMEOUT
+}
+
+enum TaskCategory {
+  CODING
+  REASONING
+  SUMMARIZATION
+  CREATIVE
+  GENERAL
+}
+
+model User {
+  id        String    @id @default(uuid())
+  email     String    @unique
+  name      String?
+  role      Role      @default(USER)
+  prompts   Prompt[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([email])
+}
+
+model Provider {
+  id           String   @id // e.g. "google", "groq", "cerebras", "openrouter"
+  name         String
+  baseUrl      String
+  apiDocsUrl   String?
+  rateLimitRpm Int      @default(60)
+  isActive     Boolean  @default(true)
+  models       Model[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Model {
+  id               String          @id // e.g. "gemini-2.5-flash", "llama-3.3-70b-versatile"
+  providerId       String
+  provider         Provider        @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  displayName      String
+  family           String          // e.g. "Gemini", "LLaMA", "Qwen", "DeepSeek"
+  contextWindow    Int             @default(32768)
+  inputCostPerM    Float           // Cost per 1M input tokens in USD
+  outputCostPerM   Float           // Cost per 1M output tokens in USD
+  isFreeTier       Boolean         @default(false)
+  isActive         Boolean         @default(true)
+  responses        ModelResponse[]
+  usageRecords     UsageRecord[]
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@index([providerId])
+}
+
+model Prompt {
+  id          String          @id @default(uuid())
+  userId      String?
+  user        User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  title       String
+  description String?
+  category    TaskCategory    @default(GENERAL)
+  tags        String[]
+  versions    PromptVersion[]
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([userId, category])
+}
+
+model PromptVersion {
+  id           String       @id @default(uuid())
+  promptId     String
+  prompt       Prompt       @relation(fields: [promptId], references: [id], onDelete: Cascade)
+  version      Int          @default(1)
+  templateText String       @db.Text
+  systemPrompt String?      @db.Text
+  temperature  Float        @default(0.7)
+  maxTokens    Int          @default(1024)
+  experiments  Experiment[]
+  createdAt    DateTime     @default(now())
+
+  @@unique([promptId, version])
+}
+
+model Experiment {
+  id              String         @id @default(uuid())
+  promptVersionId String?
+  promptVersion   PromptVersion? @relation(fields: [promptVersionId], references: [id], onDelete: SetNull)
+  title           String
+  promptText      String         @db.Text
+  systemPrompt    String?        @db.Text
+  temperature     Float          @default(0.7)
+  maxTokens       Int            @default(1024)
+  runs            ExperimentRun[]
+  createdAt       DateTime       @default(now())
+
+  @@index([createdAt])
+}
+
+model ExperimentRun {
+  id              String          @id @default(uuid())
+  experimentId    String
+  experiment      Experiment      @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  triggeredAt     DateTime        @default(now())
+  completedAt     DateTime?
+  totalDurationMs Int?
+  status          RunStatus       @default(INITIALIZED)
+  bestModelId     String?
+  judgeVerdict    String?         @db.Text
+  responses       ModelResponse[]
+
+  @@index([experimentId, status])
+}
+
+model ModelResponse {
+  id           String         @id @default(uuid())
+  runId        String
+  run          ExperimentRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  modelId      String
+  model        Model          @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  rawText      String         @db.Text
+  status       ResponseStatus @default(PENDING)
+  errorMessage String?        @db.Text
+  startedAt    DateTime       @default(now())
+  finishedAt   DateTime?
+  metric       ModelMetric?
+  evaluation   Evaluation?
+
+  @@unique([runId, modelId])
+  @@index([runId])
+  @@index([modelId])
+}
+
+model ModelMetric {
+  id                 String        @id @default(uuid())
+  responseId         String        @unique
+  response           ModelResponse @relation(fields: [responseId], references: [id], onDelete: Cascade)
+  timeToFirstTokenMs Int
+  totalDurationMs    Int
+  tokensPerSecond    Float
+  promptTokens       Int
+  completionTokens   Int
+  totalTokens        Int
+  estimatedCostUsd   Float
+  costSource         String        @default("calculated_pricing")
+  isEstimated        Boolean       @default(false)
+  createdAt          DateTime      @default(now())
+
+  @@index([responseId])
+}
+
+model Evaluation {
+  id                   String        @id @default(uuid())
+  responseId           String        @unique
+  response             ModelResponse @relation(fields: [responseId], references: [id], onDelete: Cascade)
+  judgeModelId         String
+  correctness          Float         // 0.0 - 10.0
+  relevance            Float         // 0.0 - 10.0
+  completeness         Float         // 0.0 - 10.0
+  instructionFollowing Float         // 0.0 - 10.0
+  clarity              Float         // 0.0 - 10.0
+  overallWeightedScore Float         // Weighted formula calculation
+  reasoning            String?       @db.Text
+  strengths            String[]
+  weaknesses           String[]
+  evaluatedAt          DateTime      @default(now())
+
+  @@index([responseId])
+  @@index([overallWeightedScore])
+}
+
+model UsageRecord {
+  id           String   @id @default(uuid())
+  modelId      String
+  model        Model    @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  inputTokens  Int
+  outputTokens Int
+  costUsd      Float
+  timestamp    DateTime @default(now())
+
+  @@index([modelId, timestamp])
+}

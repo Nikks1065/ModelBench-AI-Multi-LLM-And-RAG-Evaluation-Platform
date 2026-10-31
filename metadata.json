@@ -1,0 +1,6 @@
+{
+  "name": "ModelBench AI",
+  "description": "Advanced multi-LLM evaluation, comparison, performance benchmarking, and intelligent orchestration platform.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
